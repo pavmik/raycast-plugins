@@ -20,12 +20,6 @@
       "description": "System status in the menu bar",
       "mode": "menu-bar",
       "interval": "10s"
-    },
-    {
-      "name": "status",
-      "title": "System Status",
-      "description": "Full system status in a Raycast window",
-      "mode": "view"
     }
   ],
   "dependencies": {

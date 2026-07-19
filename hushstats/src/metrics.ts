@@ -281,6 +281,22 @@ export async function collect(): Promise<State> {
   return fresh;
 }
 
+/** Menu-bar icon, chosen from the menu and remembered. Cache is synchronous, so the
+ *  choice applies on the very first render instead of one frame late. */
+export const BAR_ICONS = [
+  "LineChart", "Gauge", "Waveform", "BarChart", "Heartbeat",
+  "Livestream", "CircleProgress", "ComputerChip", "Desktop", "Bolt", "CircleFilled",
+] as const;
+
+export function getBarIcon(): string {
+  const v = cache.get("baricon");
+  return v && (BAR_ICONS as readonly string[]).includes(v) ? v : "LineChart";
+}
+
+export function setBarIcon(name: string) {
+  cache.set("baricon", name);
+}
+
 /** Last known sample, so a view can paint instantly instead of flashing a spinner. */
 export function cached(): State | null {
   try {
@@ -296,7 +312,11 @@ export function severities(s: State | null) {
   const thermSev = s?.therm === "critical" ? 4 : s?.therm === "serious" ? 3 : s?.therm === "fair" ? 1 : 0;
   const cpuSev = Math.max(s ? lvl(s.cpu.avg, 20, 40, 60, 85) : 0, thermSev);
   const gpuSev = Math.max(s?.gpu != null ? lvl(s.gpu, 20, 40, 60, 85) : 0, thermSev);
-  const memSev = Math.max(s ? lvl(s.mem.pct, 60, 75, 85, 93) : 0, s?.press.sev ?? 0);
+  // macOS reports pressure "warning" routinely once RAM is full without anything actually
+  // suffering, so it stays a menu-only note. Only "critical" is worth colouring the bar.
+  // macOS deliberately keeps RAM full, so 80% used is a healthy machine, not a warning.
+  // Only genuinely tight memory (or a critical pressure reading) is worth colouring.
+  const memSev = Math.max(s ? lvl(s.mem.pct, 88, 93, 96, 98) : 0, s?.press.sev === 4 ? 4 : 0);
   const batSev = !s || s.bat.charging ? 0 : lvl(100 - s.bat.pct, 50, 65, 80, 88);
   const sysSev = Math.max(s?.disk?.sev ?? 0, s?.backup?.sev ?? 0, batSev);
   return { thermSev, cpuSev, gpuSev, memSev, batSev, sysSev, worst: Math.max(cpuSev, gpuSev, memSev, sysSev) };

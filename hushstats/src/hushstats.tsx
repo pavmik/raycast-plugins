@@ -1,7 +1,7 @@
 import { Icon, MenuBarExtra, open } from "@raycast/api";
 import { cpus, loadavg, uptime } from "os";
 import { useEffect, useState } from "react";
-import { State, cached, clusterAverages, collect, copyAction, dot, gb, ic, killProc, lvl, severities } from "./metrics";
+import { BAR_ICONS, State, cached, clusterAverages, collect, copyAction, dot, gb, getBarIcon, ic, killProc, lvl, setBarIcon, severities } from "./metrics";
 
 export default function Command() {
   const [s, setS] = useState<State | null>(cached);
@@ -22,15 +22,18 @@ export default function Command() {
   // The bar shows the icon of whichever subsystem currently carries the most weight, so a
   // glance tells you what is wrong. At rest it stays a plain dot and blends in.
   const contenders: { sev: number; icon: Icon; what: string }[] = [
-    { sev: cpuSev, icon: Icon.ComputerChip, what: `CPU ${s?.cpu.avg.toFixed(0) ?? "-"}%` },
+    { sev: cpuSev, icon: Icon.Waveform, what: `CPU ${s?.cpu.avg.toFixed(0) ?? "-"}%` },
     { sev: gpuSev, icon: Icon.Monitor, what: `GPU ${s?.gpu?.toFixed(0) ?? "-"}%` },
-    { sev: memSev, icon: Icon.MemoryChip, what: `Memory ${s?.mem.pct.toFixed(0) ?? "-"}%` },
+    { sev: memSev, icon: Icon.MemoryStick, what: `Memory ${s?.mem.pct.toFixed(0) ?? "-"}%` },
     { sev: s?.disk?.sev ?? 0, icon: Icon.HardDrive, what: `Disk ${s?.disk?.pct ?? "-"}%` },
     { sev: batSev, icon: Icon.Battery, what: `Battery ${s?.bat.pct ?? "-"}%` },
     { sev: s?.backup?.sev ?? 0, icon: Icon.ArrowClockwise, what: `Backup ${s?.backup?.age ?? ""}` },
   ];
   const top = contenders.reduce((a, b) => (b.sev > a.sev ? b : a));
-  const barIcon = worst === 0 ? Icon.CircleFilled : top.icon;
+  // One fixed shape. A shape that changes with whatever is currently worst turned out to
+  // be more distracting than informative - it flickers between subsystems as readings
+  // cross each other. Colour carries the state; the tooltip names the culprit.
+  const barIcon = (Icon[getBarIcon() as keyof typeof Icon] ?? Icon.LineChart) as Icon;
   const barTip = worst === 0 ? "hushstats - all good" : `hushstats - ${top.what}`;
 
   return (
@@ -41,7 +44,7 @@ export default function Command() {
         <MenuBarExtra.Item
           title="Load"
           subtitle={s ? `${s.cpu.avg.toFixed(0)}%` : "-"}
-          icon={ic(Icon.ComputerChip, cpuSev)}
+          icon={ic(Icon.Waveform, cpuSev)}
           onAction={() => open("/System/Applications/Utilities/Activity Monitor.app")}
         />
         {pAvg !== null && eAvg !== null && (
@@ -92,7 +95,7 @@ export default function Command() {
         <MenuBarExtra.Item
           title="Used"
           subtitle={s ? `${s.mem.pct.toFixed(0)}%   ${gb(s.mem.used)} / ${gb(s.mem.total)}` : "-"}
-          icon={ic(Icon.MemoryChip, memSev)}
+          icon={ic(Icon.MemoryStick, memSev)}
           onAction={() => open("/System/Applications/Utilities/Activity Monitor.app")}
         />
         {s?.swap && (
@@ -203,6 +206,16 @@ export default function Command() {
           <MenuBarExtra.Item title="Battery thresholds" subtitle="35 / 20 / 12 % left  ·  calm while charging" icon={ic(Icon.Dot, 2)} />
           <MenuBarExtra.Item title="Thermal throttling colours both CPU and GPU" subtitle="it is SoC-wide on Apple Silicon" icon={Icon.Info} />
           <MenuBarExtra.Item title="Click any row to copy its value" icon={Icon.Clipboard} />
+        </MenuBarExtra.Submenu>
+        <MenuBarExtra.Submenu title="Bar icon" icon={barIcon}>
+          {BAR_ICONS.map((name) => (
+            <MenuBarExtra.Item
+              key={name}
+              title={name === getBarIcon() ? `${name}  ✓` : name}
+              icon={ic((Icon[name as keyof typeof Icon] ?? Icon.LineChart) as Icon, worst)}
+              onAction={() => setBarIcon(name)}
+            />
+          ))}
         </MenuBarExtra.Submenu>
         <MenuBarExtra.Item
           title="Open Activity Monitor"

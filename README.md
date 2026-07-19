@@ -8,7 +8,7 @@ Everything here is built for Apple Silicon, reads the system without ever asking
 
 | extension | what it does |
 |---|---|
-| [**hushstats**](hushstats/) | Ambient system monitor. One dot in the menu bar - colour says how bad it is, icon says what it is. A second command opens the same numbers in a window with filtering and quit actions. |
+| [**hushstats**](hushstats/) | Ambient system monitor. One dot in the menu bar - colour says how bad it is, icon says what it is. The drop-down carries the detail, top processes with quit actions, and a pick-your-own bar icon. |
 
 ## Development
 

@@ -4,7 +4,7 @@ An ambient system monitor that stays quiet until there is a reason not to.
 
 One dot in the menu bar. Grey means everything is fine, so it disappears into the bar. When something needs attention the dot changes **colour** to say how bad it is, and **shape** to say what it is: a chip for CPU, a display for GPU, a memory module for RAM, a drive for disk, a battery for power. The only text is the battery time left, because the percentage already lives in the native battery icon.
 
-There is also a full window (`System Status`) with the same numbers, filtering, and quit actions for runaway processes.
+The drop-down has the numbers, top processes with quit actions, and a picker to change the bar icon to whatever you prefer.
 
 This is the Raycast port of the [SwiftBar plugin](https://github.com/pavmik/swiftbar-plugins).
 
@@ -65,7 +65,7 @@ npm run dev     # loads into Raycast; run the command once to pin it to the menu
 
 Menu-bar commands only appear after being launched once from Raycast.
 
-Data collection lives in `src/metrics.ts` and is shared by both commands, so the menu bar and the window can never disagree. `src/hushstats.tsx` is the menu bar, `src/status.tsx` the window.
+Data collection lives in `src/metrics.ts`, rendering in `src/hushstats.tsx`.
 
 ## What it talks to
 
