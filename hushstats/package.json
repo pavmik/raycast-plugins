@@ -19,7 +19,7 @@
       "subtitle": "System",
       "description": "System status in the menu bar",
       "mode": "menu-bar",
-      "interval": "10s"
+      "interval": "20s"
     }
   ],
   "dependencies": {

@@ -12,7 +12,7 @@ export default function Command() {
     })();
   }, []);
 
-  const { thermSev, cpuSev, gpuSev, memSev, batSev, worst } = severities(s);
+  const { thermSev, cpuSev, gpuSev, memSev, batSev, diskSev, worst } = severities(s);
   const { pAvg, eAvg } = clusterAverages(s);
   const load = loadavg();
   const up = uptime();
@@ -26,7 +26,6 @@ export default function Command() {
     { sev: gpuSev, icon: Icon.Monitor, what: `GPU ${s?.gpu?.toFixed(0) ?? "-"}%` },
     { sev: memSev, icon: Icon.MemoryStick, what: `Memory ${s?.mem.pct.toFixed(0) ?? "-"}%` },
     { sev: s?.disk?.sev ?? 0, icon: Icon.HardDrive, what: `Disk ${s?.disk?.pct ?? "-"}%` },
-    { sev: batSev, icon: Icon.Battery, what: `Battery ${s?.bat.pct ?? "-"}%` },
     { sev: s?.backup?.sev ?? 0, icon: Icon.ArrowClockwise, what: `Backup ${s?.backup?.age ?? ""}` },
   ];
   const top = contenders.reduce((a, b) => (b.sev > a.sev ? b : a));
@@ -110,7 +109,7 @@ export default function Command() {
           <MenuBarExtra.Item
             title="Pressure"
             subtitle={s.press.name}
-            icon={ic(Icon.Dot, s.press.sev)}
+            icon={ic(Icon.Dot, s.press.sev === 4 ? 4 : 0)}
             onAction={copyAction("Pressure", s.press.name)}
           />
         )}
@@ -130,7 +129,7 @@ export default function Command() {
           <MenuBarExtra.Item
             title="Disk"
             subtitle={`${s.disk.pct}%   ${gb(s.disk.free)} free`}
-            icon={ic(Icon.HardDrive, s.disk.sev)}
+            icon={ic(Icon.HardDrive, diskSev)}
             onAction={() => open("/System/Applications/Utilities/Disk Utility.app")}
           />
         )}

@@ -59,11 +59,27 @@ async function cpuSample(ms = 400) {
   return { per, avg };
 }
 
-/** Apple Silicon splits cores into performance and efficiency clusters; P-cores come first. */
-async function clusters() {
-  const p = Number((await sh("/usr/sbin/sysctl", ["-n", "hw.perflevel0.logicalcpu"])).trim());
-  const e = Number((await sh("/usr/sbin/sysctl", ["-n", "hw.perflevel1.logicalcpu"])).trim());
-  return { p: p || 0, e: e || 0 };
+/**
+ * Four sysctl readings in a single call: core clusters, memory pressure and swap. Each
+ * spawned process is a CPU wakeup, and on a fanless Mac those cost more battery than the
+ * work itself, so the collectors share one call wherever the tool allows it.
+ */
+async function sysctlBatch() {
+  const out = await sh("/usr/sbin/sysctl", [
+    "-n",
+    "hw.perflevel0.logicalcpu",
+    "hw.perflevel1.logicalcpu",
+    "kern.memorystatus_vm_pressure_level",
+    "vm.swapusage",
+  ]);
+  const lines = out.trim().split("\n");
+  const press = Number(lines[2]);
+  const sw = lines.slice(3).join(" ").match(/total = ([\d.]+)M\s+used = ([\d.]+)M/);
+  return {
+    cores: { p: Number(lines[0]) || 0, e: Number(lines[1]) || 0 },
+    press: { name: press === 4 ? "critical" : press === 2 ? "warning" : "normal", sev: press === 4 ? 4 : press === 2 ? 2 : 0 },
+    swap: sw ? { used: Number(sw[2]) / 1024, total: Number(sw[1]) / 1024 } : null,
+  };
 }
 
 /**
@@ -77,19 +93,6 @@ async function memory() {
   const available = (pages("Pages free") + pages("Pages inactive")) * pageSize;
   const total = totalmem();
   return { pct: total > 0 ? ((total - available) / total) * 100 : 0, used: total - available, total };
-}
-
-/** Swap is deliberately shown but never alarms: macOS keeps it busy even when fine. */
-async function swap() {
-  const out = await sh("/usr/sbin/sysctl", ["-n", "vm.swapusage"]);
-  const m = out.match(/total = ([\d.]+)M\s+used = ([\d.]+)M/);
-  return m ? { used: Number(m[2]) / 1024, total: Number(m[1]) / 1024 } : null;
-}
-
-/** The real "is memory actually congested" signal, unlike free/total. */
-async function pressure() {
-  const l = Number((await sh("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"])).trim());
-  return { name: l === 4 ? "critical" : l === 2 ? "warning" : "normal", sev: l === 4 ? 4 : l === 2 ? 2 : 0 };
 }
 
 /**
@@ -113,7 +116,10 @@ async function thermal(): Promise<string | null> {
 async function battery() {
   const p = await sh("/usr/bin/pmset", ["-g", "batt"]);
   const pct = Number(p.match(/(\d+)%/)?.[1] ?? 0);
-  const charging = /AC Power|charging/i.test(p);
+  // "charging" is a substring of "discharging" - match the whole state word, not a
+  // fragment. pmset prints "charging", "discharging", "AC attached" or "finishing charge".
+  const onAC = /AC Power/i.test(p);
+  const charging = onAC && !/\bdischarging\b/i.test(p);
   const hhmm = p.match(/(\d+):(\d\d)\s+remaining/);
   let time = "";
   if (hhmm) {
@@ -152,7 +158,7 @@ async function backup() {
   const last = new Date(dates.sort().at(-1)!.replace(" ", "T") + "Z");
   const hours = (Date.now() - last.getTime()) / 3.6e6;
   const age = hours < 1 ? `${Math.round(hours * 60)}m ago` : hours < 48 ? `${Math.round(hours)}h ago` : `${Math.round(hours / 24)}d ago`;
-  return { age, sev: lvl(hours, 48, 72, 120, 168), last: last.toLocaleString() };
+  return { age, sev: lvl(hours, 120, 168, 240, 336), last: last.toLocaleString() };
 }
 
 async function disk() {
@@ -210,15 +216,22 @@ async function network(): Promise<{ down: string; up: string } | null> {
   return { down: rate(rx - o.rx), up: rate(tx - o.tx) };
 }
 
-async function procs(byMem = false) {
-  const out = await sh("/bin/ps", ["-Aco", byMem ? "pid,pmem,comm" : "pid,pcpu,comm", "-r"]);
-  const lines = out.trim().split("\n").slice(1, 6);
-  return lines
+/** One ps call for both lists - sorting by memory afterwards is free. */
+async function allProcs() {
+  const out = await sh("/bin/ps", ["-Aco", "pid,pcpu,pmem,comm", "-r"]);
+  const rows = out
+    .trim()
+    .split("\n")
+    .slice(1)
     .map((l) => {
-      const m = l.trim().match(/^(\d+)\s+([\d.]+)\s+(.*)$/);
-      return { pid: Number(m?.[1] ?? 0), val: Number(m?.[2] ?? 0), name: (m?.[3] ?? "").slice(0, 24) };
+      const m = l.trim().match(/^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(.*)$/);
+      return { pid: Number(m?.[1] ?? 0), cpu: Number(m?.[2] ?? 0), mem: Number(m?.[3] ?? 0), name: (m?.[4] ?? "").slice(0, 24) };
     })
     .filter((p) => p.name && p.pid);
+  return {
+    byCpu: rows.slice(0, 5).map((p) => ({ pid: p.pid, val: p.cpu, name: p.name })),
+    byMem: [...rows].sort((a, b) => b.mem - a.mem).slice(0, 5).map((p) => ({ pid: p.pid, val: p.mem, name: p.name })),
+  };
 }
 
 /** Raycast dims menu items that have no action, so every row gets one: copying its
@@ -237,18 +250,18 @@ async function killProc(pid: number, name: string, force = false) {
 
 export interface State {
   cpu: Awaited<ReturnType<typeof cpuSample>>;
-  cores: Awaited<ReturnType<typeof clusters>>;
+  cores: { p: number; e: number };
   gpu: number | null;
   therm: string | null;
   mem: Awaited<ReturnType<typeof memory>>;
-  swap: Awaited<ReturnType<typeof swap>>;
-  press: Awaited<ReturnType<typeof pressure>>;
+  swap: { used: number; total: number } | null;
+  press: { name: string; sev: number };
   bat: Awaited<ReturnType<typeof battery>>;
   disk: Awaited<ReturnType<typeof disk>>;
   backup: Awaited<ReturnType<typeof backup>>;
   ip: string;
-  cpuProcs: Awaited<ReturnType<typeof procs>>;
-  memProcs: Awaited<ReturnType<typeof procs>>;
+  cpuProcs: { pid: number; val: number; name: string }[];
+  memProcs: { pid: number; val: number; name: string }[];
   pubip: string;
   net: Awaited<ReturnType<typeof network>>;
 }
@@ -260,25 +273,45 @@ export interface State {
  */
 export async function collect(): Promise<State> {
   const gpu = await gpuUtil();
-  const [cpu, cores, therm, mem, sw, press, bat, dsk, bkp, ip, cpuProcs, memProcs, pubip, net] = await Promise.all([
+  const [cpu, sysctls, therm, mem, bat, dsk, bkp, ip, allP, pubip, net] = await Promise.all([
     cpuSample(),
-    clusters(),
+    sysctlBatch(),
     thermal(),
     memory(),
-    swap(),
-    pressure(),
     battery(),
-    disk(),
-    backup(),
-    localIp(),
-    procs(false),
-    procs(true),
+    slow("disk", 60_000, disk),
+    slow("backup", 300_000, backup),
+    slow("ip", 60_000, localIp),
+    allProcs(),
     extIp(),
     network(),
   ]);
-  const fresh: State = { cpu, cores, gpu, therm, mem, swap: sw, press, bat, disk: dsk, backup: bkp, ip, cpuProcs, memProcs, pubip, net };
+  const fresh: State = {
+    cpu, cores: sysctls.cores, gpu, therm, mem, swap: sysctls.swap, press: sysctls.press,
+    bat, disk: dsk, backup: bkp, ip, cpuProcs: allP.byCpu, memProcs: allP.byMem, pubip, net,
+  };
   cache.set("state", JSON.stringify(fresh));
   return fresh;
+}
+
+/**
+ * Slow-moving data does not need re-reading every cycle. Backup age, disk usage and the
+ * local IP change on the scale of minutes, so they are cached and their processes are
+ * spawned once a minute instead of on every refresh - fewer wakeups, less battery.
+ */
+async function slow<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const raw = cache.get(`slow:${key}`);
+  if (raw) {
+    try {
+      const { t, v } = JSON.parse(raw) as { t: number; v: T };
+      if (Date.now() - t < ttlMs) return v;
+    } catch {
+      /* fall through and refetch */
+    }
+  }
+  const v = await fn();
+  cache.set(`slow:${key}`, JSON.stringify({ t: Date.now(), v }));
+  return v;
 }
 
 /** Menu-bar icon, chosen from the menu and remembered. Cache is synchronous, so the
@@ -316,10 +349,13 @@ export function severities(s: State | null) {
   // suffering, so it stays a menu-only note. Only "critical" is worth colouring the bar.
   // macOS deliberately keeps RAM full, so 80% used is a healthy machine, not a warning.
   // Only genuinely tight memory (or a critical pressure reading) is worth colouring.
-  const memSev = Math.max(s ? lvl(s.mem.pct, 88, 93, 96, 98) : 0, s?.press.sev === 4 ? 4 : 0);
+  const memSev = s?.press.sev === 4 ? 4 : 0;
   const batSev = !s || s.bat.charging ? 0 : lvl(100 - s.bat.pct, 50, 65, 80, 88);
-  const sysSev = Math.max(s?.disk?.sev ?? 0, s?.backup?.sev ?? 0, batSev);
-  return { thermSev, cpuSev, gpuSev, memSev, batSev, sysSev, worst: Math.max(cpuSev, gpuSev, memSev, sysSev) };
+  // Battery is deliberately kept out of the bar colour: running on battery is normal, not
+  // an alert. It still colours its own row in the menu, just not the whole icon.
+  const diskSev = s && s.disk && s.disk.pct >= 90 ? s.disk.sev : 0;
+  const sysSev = Math.max(diskSev, s?.backup?.sev ?? 0);
+  return { thermSev, cpuSev, gpuSev, memSev, batSev, diskSev, sysSev, worst: Math.max(cpuSev, gpuSev, memSev, sysSev) };
 }
 
 /** Per-cluster averages. P-cores come first in the core list on Apple Silicon. */
